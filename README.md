@@ -1,4 +1,4 @@
-# When Do Graph Implicit Models Capture Long-Range Dependencies?
+
 
 Code accompanying the paper. Reproduces the chain-parity diagnostic, the
 real-world graph-level benchmarks, and the AdaGIM ablations.
@@ -125,13 +125,4 @@ plot.
   baselines is on equal architectural footing (no graph-level augmentation
   on either side).
 
-## Citation
 
-```
-@inproceedings{anonymous2026when,
-  title = {When Do Graph Implicit Models Capture Long-Range Dependencies?},
-  author = {Anonymous},
-  booktitle = {NeurIPS},
-  year = {2026},
-}
-```
