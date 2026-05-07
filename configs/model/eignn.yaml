@@ -1,0 +1,6 @@
+name: eignn
+hidden: 100
+threshold: 1.0e-4
+max_iter: 300
+gamma: 0.99
+g_type: psd

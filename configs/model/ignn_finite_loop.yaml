@@ -1,0 +1,6 @@
+name: ignn_finite_loop
+hidden: 128
+T: 4  # match GCN/GINE num_layers=4
+dropout: 0.1
+activation: relu
+graph_pool: mean

@@ -1,0 +1,7 @@
+name: ignn_finite_act
+hidden: 96
+max_iter: 30
+ponder_eps: 1.0e-2
+ponder_lambda: 1.0e-2
+activation: relu
+graph_pool: mean

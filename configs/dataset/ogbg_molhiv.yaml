@@ -1,0 +1,4 @@
+name: ogbg_molhiv
+root: /scratch/yongjian/datasets/OGB
+batch_size: 128
+num_workers: 2

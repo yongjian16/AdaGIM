@@ -1,0 +1,7 @@
+name: gcnii
+hidden: 128
+num_layers: 8
+alpha: 0.1
+theta: 0.5
+dropout: 0.1
+graph_pool: mean

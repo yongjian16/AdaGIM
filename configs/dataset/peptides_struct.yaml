@@ -1,0 +1,4 @@
+name: peptides_struct
+root: /scratch/yongjian/datasets/LRGB
+batch_size: 128
+num_workers: 2

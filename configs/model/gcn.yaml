@@ -1,0 +1,5 @@
+name: gcn
+hidden: 128
+num_layers: 4
+dropout: 0.1
+graph_pool: mean

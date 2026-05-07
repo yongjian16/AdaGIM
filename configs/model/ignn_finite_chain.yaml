@@ -1,0 +1,5 @@
+name: ignn_finite_chain
+hidden: 100
+L: 10
+activation: relu
+init_gain: 0.99

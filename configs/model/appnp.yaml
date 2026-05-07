@@ -1,0 +1,6 @@
+name: appnp
+hidden: 128
+K: 10
+alpha: 0.1
+dropout: 0.1
+graph_pool: mean

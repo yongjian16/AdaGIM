@@ -1,0 +1,25 @@
+name: adagim
+hidden: 128
+s_W: 0.99            # Cayley scale; ‖W‖_2 = s_W; must be in (0, 1) for contraction
+phi: tanh            # propagation activation: tanh | relu
+row_norm: false      # optional LayerNorm in f_θ; default off (Cayley alone is enough)
+
+# Outer Picard solver
+K_max: 50            # max outer iterations
+alpha: 1.0           # damping (1.0 = pure Picard)
+tol: 1.0e-3          # convergence tolerance
+
+# Residual-factor gate A = q · sigmoid(w·|H_new−H_old| + b),
+# where q = 1 − exp(−‖H_new−H_old‖²/τ²) auto-zeros at the fixed point.
+gate_tau_init: 0.3   # τ at init; smaller → gate stays active later in trajectory
+gate_pe_dim: 16      # legacy; unused by the residual-factor gate
+gate_hidden: null    # legacy; unused
+gate_init_bias: 1.0  # legacy; unused (score linear's bias inits to 0)
+
+# Synthetic chain-parity only — period for the gate's PE so chain-positions
+# match between train and test (defaults to L_train from dataset_meta).
+# chain_period: 10
+
+# Readout (PyG mode only; auto-set to "node" for node tasks)
+graph_pool: mean
+head_dropout: 0.0

@@ -1,0 +1,164 @@
+# =============================================================================
+# TRIGNN tune-config: every hyperparameter on one page.
+# Run with:
+#     PYTHONPATH=. python -m run --tune_config configs/tune.yaml
+#
+# Outputs go to <out_dir>/<dataset>/<model>/seed_<n>/:
+#   - config.yaml    (resolved config snapshot, including this file's overrides)
+#   - metrics.csv    (one row per epoch: train_loss, val_metric, test_metric_at_best_val, + 8 diagnostics)
+#   - metrics.png    (auto-updating diagnostic plot, regenerated every epoch)
+#   - summary.yaml   (final best_val_metric, test_metric_at_best_val, metric name)
+#   - log.txt        (run log)
+# =============================================================================
+
+
+# -------- Entry point --------------------------------------------------------
+dataset: zinc                  # zinc | peptides_func | peptides_struct | ogbg_molhiv | chain_parity
+model: trignn                  # trignn | ignn | eignn | mgnni | gind | monotone_mignn | gcn | gine | ...
+seed: 0
+out_dir: runs_tune             # output root; final dir = out_dir/zinc/trignn/seed_0/
+gpu: 3                         # GPU index (sets CUDA_VISIBLE_DEVICES *before* torch import).
+                               # Free GPUs: 3, 6. GPUs 0/1 are broken on this host.
+                               # Override on CLI via `--gpu 6`. Comment out to use default device.
+
+
+# -------- Dataset (overrides configs/dataset/<dataset>.yaml) -----------------
+batch_size: 128
+# num_workers: 2               # PyG DataLoader workers (default 2)
+# subset: true                 # ZINC: use 12K subset (default true)
+
+
+# -------- TRIGNN architecture ------------------------------------------------
+hidden: 145                    # message-kernel width (ZINC GCN baseline = 145)
+T: 8                          # trajectory length per Psi call (more = deeper per-step reasoning)
+num_layers: 1                  # stacked TRIGNNCore count (each core has its own Cayley W + halt head + outer Picard)
+                               #   sweep top-1 (trial 100, val=0.4813, test=0.5082)
+num_inner_layers: 1            # depth of f_θ INSIDE one Psi-step (each inner layer has its own Cayley W + LayerNorm)
+                               #   1 = single-layer GCN (original behavior).
+                               #   L>1 = composes L GCN layers per propagation step. Each layer's contraction is s_W,
+                               #         so composition is s_W^L (more contractive trajectory). Adds hidden² params per layer.
+                               #   Trade-off vs num_layers: num_inner_layers gives deeper per-step receptive field;
+                               #   num_layers gives more independent halting decisions.
+phi: relu                      # activation in propagation: tanh | relu
+row_norm: true                 # LayerNorm + /sqrt(hidden) per propagation step (Plan §1.6 A2)
+
+# Outer Picard fixed-point solver (z* = Psi(z*))
+K_max: 10                      # max outer iterations
+alpha: 0.5                     # damping: z_new = (1-alpha)*z + alpha*Psi(z); 1.0 = pure Picard
+tol: 1.0e-3                    # relative-change termination tolerance
+
+# Contraction-bound parameters
+init_s_W: 0.5                  # fixed Cayley scale (kappa); 0.3 = halt-friendly, 0.7 = aggressive kernel
+epsilon: 0.0001                  # contraction safety margin: L_Psi <= 1 - epsilon
+# init_s_g                     # IGNORED — s_g is now algorithmic (pinned to the cap)
+
+# Readout selection
+graph_pool: mean               # "mean" | "sum" | "max" | "node" (auto-set to "node" for node tasks)
+readout_mode: gumbel       # "weighted" (Σ_t π^t z^t)             — smooth, Jensen-bound
+                               # "argmax"   (z^{argmax_t π^t})         — hard commit; non-diff in t*
+                               # "gumbel"   (Straight-Through Gumbel)  — diff in t*; sharpens π
+                               #   Auto-default: argmax for node tasks, weighted for graph tasks.
+                               #   Override here to force.
+gumbel_tau: 0.01                # Gumbel-Softmax temperature (ONLY used when readout_mode='gumbel')
+                               #   1.0 = soft (similar to weighted)
+                               #   0.5 = balanced
+                               #   0.1 = sharp (close to hard argmax)
+                               #   Common to anneal 1.0 → 0.1 over training, but a fixed value works.
+head_dropout: 0.1              # dropout applied to readout before the head linear
+
+# PonderNet halting + KL regularizer (only matters for node tasks; KL is regularizer for graph tasks)
+traj_init: zero                # Initial state of the DIFFERENTIABLE trajectory unroll:
+                               # "zero"        → z^0 = 0  (matches IGNN/DEQ/PonderNet; halt steps differentiable)
+                               # "input"       → z^0 = U  (input embedding; similar but information-bearing)
+                               # "fixed_point" → z^0 = Z* (legacy; trajectory degenerate, halt collapses)
+                               # The outer Picard loop (which finds Z*) is unchanged — this only
+                               # controls where the differentiable trajectory begins.
+halting_kind: bernoulli        # "bernoulli" → cumulative-Bernoulli π^t = q^t·∏(1−q^s)  (PonderNet, ACT)
+                               # "softmax"   → categorical π = softmax_t(w_g·xi^t) over halt steps {1..T}.
+                               # "uniform"|"first"|"last" → fixed π (diagnostic; no head):
+                               #   uniform = 1/T each, first = (1,0,…), last = (0,…,1).
+                               # Cumulative-Bernoulli structurally biases π toward early halt;
+                               # softmax decouples the steps so π can put mass anywhere without
+                               # paying a survival tax. Use "softmax" if you observe argmax collapse.
+per_step_halt_head: false      # If true, replace the single shared w_g ∈ R^{3d} with a per-step
+                               # matrix w_g ∈ R^{T × 3d}. Each halt step t uses its own row w_g[t-1]
+                               # to compute its logit. Tiny param cost; gives each step independent
+                               # capacity (instead of a single linear functional applied to all xi^t).
+                               # Useful when the shared head gets stuck pulling π toward t=1.
+halt_head_arch: attn           # Halting-head architecture:
+                               #   "capped_linear" → norm-pinned to s_g cap (legacy; head's
+                               #                     magnitude couples into L_Ψ bound, restrictive)
+                               #   "linear"        → standard nn.Linear(3d, 1), Kaiming init, no cap
+                               #   "mlp"           → 2-layer MLP: Linear(3d, d) → GELU → Linear(d, 1)
+                               #   "attn"          → Q-K cosine similarity → ReLU(sim − τ_t) →
+                               #                     similarity-weighted aggregation → linear readout.
+                               #                     τ is a learnable per-step vector (one entry per
+                               #                     halt step). Within-graph attention only
+                               #                     (PyG: masked via to_dense_batch).
+                               # When != "capped_linear", outer Picard uses pure propagation
+                               # (Ψ_prop alone) for the fixed-point search, so the halting head is
+                               # a free output layer. Contraction guarantee on Z* still holds via
+                               # s_W < 1 from the Cayley constraint.
+halt_attn_dim: 32              # Attention-space dim d_h for halt_head_arch="attn"; ignored otherwise.
+                               # Q = z W_Q ∈ R^{d_h}, K = z W_K ∈ R^{d_h}; rows L2-normalized.
+implicit: false                # true  → outer Picard fixed-point search (Z* = Ψ(Z*)) with phantom
+                               #         gradient backward. The original TRIGNN.
+                               # false → no Picard. The model is just a finite T-step unroll of the
+                               #         inner propagation, with halting/readout applied to the
+                               #         trajectory. True backprop through all T steps.
+                               #         Halt-head Lipschitz no longer constrains anything (no Banach
+                               #         to break) — useful when iterating on halt-head designs.
+learn_halt_scale: false        # Only applied when halt_head_arch=capped_linear. For "linear"/"mlp",
+                               # the head learns its own magnitude as part of standard training.
+use_step_embed: true          # Architectural anti-collapse #1 (Universal Transformer / Ouro-style).
+                               # If true, concat learnable per-step vector pos^t = nn.Embedding(T, hidden)(t)
+                               # to xi^t → halt-head input dim grows from 3·hidden to 4·hidden. Gives the
+                               # SHARED head explicit "which step am I on" context, enabling step-conditional
+                               # decisions without per_step_halt_head's full T-fold parameter blow-up.
+center_logits: true           # Architectural anti-collapse #2 (MoE-style logit centering).
+                               # If true (and halting_kind=softmax), subtract mean over t from logits
+                               # before softmax: π = softmax(logit − logit.mean(t)). Removes any global
+                               # per-step bias the head might learn (e.g., "always halt at t=k" failure
+                               # mode). Cost-free, no params.
+prior_kind: uniform          # "geometric" → KL(π ‖ Geom(lambda_p)) — PonderNet (Banino 2021).
+                               # "uniform"   → KL(π ‖ Uniform) = const − H(π) — Ouro/LoopLM (Zhu 2025).
+                               # The uniform variant fights the early-halt collapse we
+                               # observe with geometric on graph-regression tasks.
+lambda_p: 0.1                  # geometric prior parameter (only used when prior_kind=geometric)
+lambda_aux: 1.0                # weight on per-iteration aux loss (NODE tasks only)
+lambda_kl: 0.3                # weight on KL(π ‖ prior); applies to either prior
+
+
+# -------- Diagnostics --------------------------------------------------------
+eval_argmax_every: 5           # TRIGNN-only halting-distribution snapshot cadence.
+                               # Saves argmax_epoch_NNN.png every N epochs on the val set,
+                               # plus argmax_epoch_final.png + argmax_test.npy + mean_pi_test.npy
+                               # on the test set at end-of-training.
+                               # 0 = disable; 1 = every epoch; 5 = default cadence.
+
+
+# -------- Training -----------------------------------------------------------
+epochs: 100                    # max epochs (early-stop will usually fire before this)
+lr: 1.0e-2                     # Adam learning rate; 1e-2 worked best on ZINC in our v4 sweep
+wd: 1e-5                       # Adam weight decay
+patience: 10                   # early-stop patience (epochs without min_delta improvement)
+min_delta: 0.001             # min val improvement to count as "improved" and reset patience
+
+# Learning-rate scheduler (optional). The current `lr` value above is the *starting* lr.
+scheduler: none             # "none" | "plateau" | "cosine" | "warmup_cosine" | "step" | "multistep"
+                               #   plateau       — ReduceLROnPlateau on val_metric (matches GCN/GINE/GCNII baselines)
+                               #   cosine        — CosineAnnealingLR over `epochs` (matches GraphGPS-style)
+                               #   warmup_cosine — linear warmup then cosine (matches official GraphGPS ZINC)
+                               #   step          — drop lr by scheduler_factor every scheduler_step_size epochs
+                               #   multistep     — drop lr by scheduler_factor at each milestone in scheduler_milestones
+scheduler_min_lr: 1.0e-5       # floor lr (used by all variants)
+# Plateau / step / multistep — multiplicative factor applied at each drop:
+scheduler_factor: 0.1          # 0.5 = halve, 0.1 = decimate, etc.
+# Plateau-only:
+scheduler_patience: 10         # plateau patience (NOT the same as early-stop patience)
+# Cosine / warmup-cosine:
+scheduler_T_max: 200           # cosine half-period (default = epochs)
+scheduler_warmup_epochs: 5     # warmup_cosine only; linear ramp duration in epochs
+# Step / multistep:
+scheduler_step_size: 20        # step only — drop lr every N epochs
+scheduler_milestones: [60, 120] # multistep only — list of epoch indices at which to drop lr

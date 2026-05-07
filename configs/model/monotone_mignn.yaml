@@ -1,0 +1,8 @@
+name: monotone_mignn
+hidden: 64
+max_iter: 50
+tol: 1.0e-5
+inv_method: neumann-3
+nonlin: relu
+graph_pool: mean
+dropout: 0.0

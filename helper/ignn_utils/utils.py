@@ -1,0 +1,186 @@
+import sys
+
+import numpy as np
+import scipy.sparse as sp
+import torch
+import torch_sparse
+import pickle as pkl
+import networkx as nx
+from time import perf_counter
+
+from sklearn import metrics
+
+import numpy as np
+import scipy.sparse as sp
+import torch
+
+def aug_normalized_adjacency(adj, need_orig=False):
+   if not need_orig:
+       adj = adj + sp.eye(adj.shape[0])
+   adj = sp.coo_matrix(adj)
+   row_sum = np.array(adj.sum(1))
+   d_inv_sqrt = np.power(row_sum, -0.5).flatten()
+   d_inv_sqrt[np.isinf(d_inv_sqrt)] = 0.
+   d_mat_inv_sqrt = sp.diags(d_inv_sqrt)
+   return d_mat_inv_sqrt.dot(adj).dot(d_mat_inv_sqrt).tocoo()
+
+def fetch_normalization(type):
+   switcher = {
+       'AugNormAdj': aug_normalized_adjacency,  # A' = (D + I)^-1/2 * ( A + I ) * (D + I)^-1/2
+   }
+   func = switcher.get(type, lambda: "Invalid normalization technique.")
+   return func
+
+def row_normalize(mx):
+    """Row-normalize sparse matrix"""
+    rowsum = np.array(mx.sum(1))
+    r_inv = np.power(rowsum, -1).flatten()
+    r_inv[np.isinf(r_inv)] = 0.
+    r_mat_inv = sp.diags(r_inv)
+    mx = r_mat_inv.dot(mx)
+    return mx
+
+
+
+
+
+
+def sparse_mx_to_torch_sparse_tensor(sparse_mx, device=None):
+    """Convert a scipy sparse matrix to a torch sparse tensor."""
+    sparse_mx = sparse_mx.tocoo().astype(np.float32)
+    indices = torch.from_numpy(
+        np.vstack((sparse_mx.row, sparse_mx.col)).astype(np.int64))
+    values = torch.from_numpy(sparse_mx.data)
+    shape = torch.Size(sparse_mx.shape)
+    tensor = torch.sparse.FloatTensor(indices, values, shape)
+    if device is not None:
+        tensor = tensor.to(device)
+    return tensor
+
+
+def get_spectral_rad(sparse_tensor, tol=1e-5):
+    """Compute spectral radius from a tensor"""
+    A = sparse_tensor.data.coalesce().cpu()
+    A_scipy = sp.coo_matrix((np.abs(A.values().numpy()), A.indices().numpy()), shape=A.shape)
+    return np.abs(sp.linalg.eigs(A_scipy, k=1, return_eigenvectors=False)[0]) + tol
+
+def projection_norm_inf(A, kappa=0.99, transpose=False):
+    """ project onto ||A||_inf <= kappa return updated A"""
+    # TODO: speed up if needed
+    v = kappa
+    if transpose:
+        A_np = A.T.clone().detach().cpu().numpy()
+    else:
+        A_np = A.clone().detach().cpu().numpy()
+    x = np.abs(A_np).sum(axis=-1)
+    for idx in np.where(x > v)[0]:
+        # read the vector
+        a_orig = A_np[idx, :]
+        a_sign = np.sign(a_orig)
+        a_abs = np.abs(a_orig)
+        a = np.sort(a_abs)
+
+        s = np.sum(a) - v
+        l = float(len(a))
+        for i in range(len(a)):
+            # proposal: alpha <= a[i]
+            if s / l > a[i]:
+                s -= a[i]
+                l -= 1
+            else:
+                break
+        alpha = s / l
+        a = a_sign * np.maximum(a_abs - alpha, 0)
+        # verify
+        assert np.isclose(np.abs(a).sum(), v, atol=1e-4)
+        # write back
+        A_np[idx, :] = a
+    A.data.copy_(torch.tensor(A_np.T if transpose else A_np, dtype=A.dtype, device=A.device))
+    return A
+
+def projection_norm_inf_and_1(A, kappa_inf=0.99, kappa_1=None, inf_first=True):
+    """ project onto ||A||_inf <= kappa return updated A"""
+    # TODO: speed up if needed
+    v_inf = kappa_inf
+    v_1 = kappa_inf if kappa_1 is None else kappa_1
+    A_np = A.clone().detach().cpu().numpy()
+    if inf_first:
+        A_np = projection_inf_np(A_np, v_inf)
+        A_np = projection_inf_np(A_np.T, v_1).T
+    else:
+        A_np = projection_inf_np(A_np.T, v_1).T
+        A_np = projection_inf_np(A_np, v_inf)
+    A.data.copy_(torch.tensor(A_np, dtype=A.dtype, device=A.device))
+    return A
+
+def projection_inf_np(A_np, v):
+    x = np.abs(A_np).sum(axis=-1)
+    for idx in np.where(x > v)[0]:
+        # read the vector
+        a_orig = A_np[idx, :]
+        a_sign = np.sign(a_orig)
+        a_abs = np.abs(a_orig)
+        a = np.sort(a_abs)
+
+        s = np.sum(a) - v
+        l = float(len(a))
+        for i in range(len(a)):
+            # proposal: alpha <= a[i]
+            if s / l > a[i]:
+                s -= a[i]
+                l -= 1
+            else:
+                break
+        alpha = s / l
+        a = a_sign * np.maximum(a_abs - alpha, 0)
+        # verify
+        assert np.isclose(np.abs(a).sum(), v, atol=1e-6)
+        # write back
+        A_np[idx, :] = a
+    return A_np
+
+def clip_gradient(model, clip_norm=10):
+    """ clip gradients of each parameter by norm """
+    for param in model.parameters():
+        torch.nn.utils.clip_grad_norm(param, clip_norm)
+    return model
+
+def l_1_penalty(model, alpha=0.1):
+    regularization_loss = 0
+    for param in model.parameters():
+        regularization_loss += alpha * torch.sum(torch.abs(param))
+    return regularization_loss
+
+class AdditionalLayer(torch.nn.Module):
+    def __init__(self, model, num_input, num_output, activation=torch.nn.ReLU()):
+        super().__init__()
+        self.model = model
+        self.add_module("model", self.model)
+        self.activation = activation
+        if isinstance(activation, torch.nn.Module):
+            self.add_module("activation", self.activation)
+        self.func = torch.nn.Linear(num_input, num_output, bias=False)
+
+    def forward(self, *input):
+        x = self.model(*input)
+        x = self.activation(x)
+        return self.func(x)
+
+
+class SparseDropout(torch.nn.Module):
+    def __init__(self, dprob=0.5):
+        super(SparseDropout, self).__init__()
+        # dprob is ratio of dropout
+        # convert to keep probability
+        self.kprob=1-dprob
+
+    def forward(self, x, training):
+        if training:
+            mask=((torch.rand(x._values().size())+(self.kprob)).floor()).type(torch.bool)
+            rc=x._indices()[:,mask]
+            val=x._values()[mask]*(1.0/self.kprob)
+            return torch.sparse.FloatTensor(rc, val, torch.Size(x.shape))
+        else:
+            return x
+
+

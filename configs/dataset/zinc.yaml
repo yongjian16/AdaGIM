@@ -1,0 +1,5 @@
+name: zinc
+root: /scratch/yongjian/datasets/ZINC
+subset: true
+batch_size: 128
+num_workers: 2

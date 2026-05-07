@@ -1,0 +1,111 @@
+gcn/zinc:
+  dropout: 0.0
+  graph_pool: sum
+  hidden: 64
+  lr: 0.0001
+  num_layers: 8
+  virtual_node: false
+  wd: 0.0001
+
+gcn/peptides_func:
+  dropout: 0.0
+  graph_pool: sum
+  hidden: 64
+  lr: 0.0001
+  num_layers: 8
+  virtual_node: false
+  wd: 0.0001
+
+gcn/peptides_struct:
+  dropout: 0.0
+  graph_pool: sum
+  hidden: 64
+  lr: 0.0001
+  num_layers: 8
+  virtual_node: false
+  wd: 0.0001
+
+gcn/ogbg_molhiv:
+  dropout: 0.0
+  graph_pool: mean
+  hidden: 128
+  lr: 0.0001
+  num_layers: 8
+  virtual_node: false
+  wd: 0.0001
+
+gcnii/zinc:
+  alpha: 0.1
+  dropout: 0.1
+  graph_pool: sum
+  hidden: 64
+  lr: 0.001
+  num_layers: 8
+  theta: 1.0
+  wd: 0.0001
+
+gcnii/peptides_func:
+  alpha: 0.1
+  dropout: 0.1
+  graph_pool: sum
+  hidden: 64
+  lr: 0.001
+  num_layers: 8
+  theta: 1.0
+  wd: 0.0001
+
+gcnii/peptides_struct:
+  alpha: 0.1
+  dropout: 0.1
+  graph_pool: sum
+  hidden: 64
+  lr: 0.001
+  num_layers: 8
+  theta: 1.0
+  wd: 0.0001
+
+gcnii/ogbg_molhiv:
+  alpha: 0.1
+  dropout: 0.1
+  graph_pool: sum
+  hidden: 64
+  lr: 0.001
+  num_layers: 8
+  theta: 1.0
+  wd: 0.0001
+
+appnp/zinc:
+  K: 10
+  alpha: 0.1
+  dropout: 0.1
+  graph_pool: sum
+  hidden: 96
+  lr: 0.001
+  wd: 0.0001
+
+appnp/peptides_func:
+  K: 10
+  alpha: 0.1
+  dropout: 0.1
+  graph_pool: sum
+  hidden: 96
+  lr: 0.001
+  wd: 0.0001
+
+appnp/peptides_struct:
+  K: 10
+  alpha: 0.2
+  dropout: 0.1
+  graph_pool: sum
+  hidden: 128
+  lr: 0.0005
+  wd: 1.0e-05
+
+appnp/ogbg_molhiv:
+  K: 10
+  alpha: 0.2
+  dropout: 0.1
+  graph_pool: sum
+  hidden: 128
+  lr: 0.0005
+  wd: 1.0e-05

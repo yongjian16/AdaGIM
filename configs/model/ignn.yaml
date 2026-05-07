@@ -1,0 +1,6 @@
+name: ignn
+hidden: 128
+kappa: 0.99
+fw_mitr: 50
+phi: tanh
+graph_pool: mean

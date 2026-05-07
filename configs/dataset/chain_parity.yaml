@@ -1,0 +1,8 @@
+name: chain_parity
+K_train: 1
+L_train: 10
+K_test: 1
+L_test: 100
+bidirectional: false
+pad_value: 0
+supervise: all_prefix
